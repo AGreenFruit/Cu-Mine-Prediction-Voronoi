@@ -78,10 +78,11 @@ def parse_tomo(path_vp, path_vs, path_vpvs):
 	for X in unique:
 		rows = tomo_df.loc[tomo_df['X']==X]
 		coord = rows.iloc[:1,:2].to_numpy()[0]
-		# features = rows[['Vp','Vs','VpVs']].to_numpy().flatten()
+		features = rows[['Vp','Vs','VpVs']].to_numpy().flatten()
 		# features = rows[['Vp']].to_numpy().flatten()
-		features = rows[['Vs']].to_numpy().flatten()
+		# features = rows[['Vs']].to_numpy().flatten()
 		# features = rows[['Vp','Vs']].to_numpy().flatten()
+		# features = rows[['VpVs']].to_numpy().flatten()
 
 		data = np.concatenate((coord,features))
 		tomography.append(data)
@@ -165,26 +166,37 @@ def waxman_prob(points, vor, tomography, alpha=0.1, beta=0.4):
 		dist_dict[i] = []
 
 	# Match points to partitions
-	for p in points:
-		dist = np.linalg.norm(p-centers,axis=1)
+	for p in tomography:
+		dist = np.linalg.norm(p[:2]-centers,axis=1)
 		partition_idx = np.argmin(dist)
+		if min(dist)==0:
+			continue
 
 		mask1 = (tomography[:,0]==centers[partition_idx][0])
 		mask2 = (tomography[:,0]==p[0])
 		center_point = tomography[mask1,:][0]
 		feat_point = tomography[mask2,:][0]
 		f_dist = np.linalg.norm(center_point[2:]-feat_point[2:])
-		dist_dict[partition_idx].append(f_dist)
+		if feat_point[:2] in points:
+			dist_dict[partition_idx].append([f_dist,1])
+		else:
+			dist_dict[partition_idx].append([f_dist,0])
 
-	prob_list = []
+	mine_prob = []
+	nonmine_prob = []
 	for i in range(len(dist_dict)):
-		vals = np.array(dist_dict[i])
+		data = np.array(dist_dict[i])
+		vals = data[:,0]
+		labels = data[:,1]
 		L = max(vals)-min(vals)
-		probs = beta*np.exp(-1*vals/(alpha*L))
-		avg_prob = np.average(probs)
-		# print("Partition {}: Highest average probability of {} with a/b of {}".format(i,best_prob,best_params))
-		prob_list.append(avg_prob)
-	print("Average partition accuracy:", np.average(np.array(prob_list)))
+		probs = beta*np.exp((-1*vals)/(alpha*L))
+		for j in range(len(probs)):
+			if labels[j] == 0:
+				nonmine_prob.append(probs[j])
+			else:
+				mine_prob.append(probs[j])
+	print("Average mine partition accuracy:", np.average(np.array(mine_prob)))
+	print("Average non-mine partition accuracy:", np.average(np.array(nonmine_prob)))
 
 def calc_dist_feature(tomography, points, vor):
 	"""
@@ -204,7 +216,6 @@ def calc_dist_feature(tomography, points, vor):
 	points: non-sampled mine points
 	vor: voronoi graph
 	"""
-
 	centers = vor.points
 	dist_dict = {}
 	for i in range(len(centers)):
@@ -225,7 +236,7 @@ def calc_dist_feature(tomography, points, vor):
 			dist_dict[partition_idx].append([f_dist, p_dist, 1])
 		else:
 			dist_dict[partition_idx].append([f_dist, p_dist, 0])
-		
+
 	return dist_dict
 
 def logistic_regression(data, threshold=.5):
@@ -379,7 +390,7 @@ def deep_nn(data, ratio=1):
 	print('Testing Accuracy: %.2f' % (accuracy*100))
 	return model
 
-def generate_isomap(tomography, vor, model, drawing=False):
+def generate_isomap(tomography, vor, model, t1=.33, t2=.66, drawing=True):
 	"""
 	Creates an isomap using the neural network to determine
 	mine probabilities from every point.
@@ -396,6 +407,8 @@ def generate_isomap(tomography, vor, model, drawing=False):
 	model: Keras neural network
 	drawing: Control parameter for plotting isomap
 	"""
+
+	assert t1 < t2, "Threshold 1 must be less than threshold 2"
 
 	centers = vor.points
 
@@ -430,9 +443,9 @@ def generate_isomap(tomography, vor, model, drawing=False):
 	if drawing:
 		colors = []
 		for prob in all_probs:
-			if prob < .33:
+			if prob < t1:
 				colors.append('red')
-			elif prob < .66:
+			elif prob < t2:
 				colors.append('green')
 			else:
 				colors.append('blue')
@@ -458,7 +471,7 @@ if __name__ == "__main__":
 	# Retrieve mine points corresponding to tomography points
 	matched_points = get_mine_tomo_points(mines, tomography)
 	# Generate vornoi graph from matched points
-	vor, sample_idx = generate_voronoi(matched_points, sample=True, n=20, drawing=True)
+	vor, sample_idx = generate_voronoi(matched_points, sample=True, n=10, drawing=False)
 
 	# Get non-sampled matched points
 	mask = np.ones(len(matched_points),dtype=bool)
@@ -486,7 +499,7 @@ if __name__ == "__main__":
 	nn = deep_nn(dist_data, ratio=2)
 
 	# Calculate ISOMAP for each Voronoi partition
-	generate_isomap(tomography, vor, nn, True)
+	generate_isomap(tomography, vor, nn)
 
 
 
